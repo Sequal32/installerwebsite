@@ -1,0 +1,368 @@
+<!DOCTYPE html><html lang="en"><head><script>// polyfills
+if (!String.prototype.startsWith) {
+  String.prototype.startsWith = function (searchString, position) {
+    position = position || 0
+    return this.substr(position, searchString.length) === searchString
+  }
+}
+
+;(function () {
+  function s4() {
+    return Math.floor((1 + Math.random()) * 0x10000)
+      .toString(16)
+      .substring(1)
+  }
+
+  var uid = function () {
+    return (
+      s4() +
+      s4() +
+      '-' +
+      s4() +
+      '-' +
+      s4() +
+      '-' +
+      s4() +
+      '-' +
+      s4() +
+      s4() +
+      s4()
+    )
+  }
+
+  function ownKeys(object, enumerableOnly) {
+    var keys = Object.keys(object)
+    if (Object.getOwnPropertySymbols) {
+      var symbols = Object.getOwnPropertySymbols(object)
+      if (enumerableOnly)
+        symbols = symbols.filter(function (sym) {
+          return Object.getOwnPropertyDescriptor(object, sym).enumerable
+        })
+      keys.push.apply(keys, symbols)
+    }
+    return keys
+  }
+
+  function _objectSpread(target) {
+    for (var i = 1; i < arguments.length; i++) {
+      var source = arguments[i] != null ? arguments[i] : {}
+      if (i % 2) {
+        ownKeys(source, true).forEach(function (key) {
+          _defineProperty(target, key, source[key])
+        })
+      } else if (Object.getOwnPropertyDescriptors) {
+        Object.defineProperties(
+          target,
+          Object.getOwnPropertyDescriptors(source)
+        )
+      } else {
+        ownKeys(source).forEach(function (key) {
+          Object.defineProperty(
+            target,
+            key,
+            Object.getOwnPropertyDescriptor(source, key)
+          )
+        })
+      }
+    }
+    return target
+  }
+
+  function _defineProperty(obj, key, value) {
+    if (key in obj) {
+      Object.defineProperty(obj, key, {
+        value: value,
+        enumerable: true,
+        configurable: true,
+        writable: true
+      })
+    } else {
+      obj[key] = value
+    }
+    return obj
+  }
+
+  if (!window.__TAURI__) {
+    window.__TAURI__ = {}
+  }
+
+  window.__TAURI__.transformCallback = function transformCallback(
+    callback,
+    once
+  ) {
+    var identifier = uid()
+
+    window[identifier] = function (result) {
+      if (once) {
+        delete window[identifier]
+      }
+
+      return callback && callback(result)
+    }
+
+    return identifier
+  }
+
+  window.__TAURI__.promisified = function promisified(args) {
+    var _this = this
+
+    return new Promise(function (resolve, reject) {
+      var callback = _this.transformCallback(function (r) {
+        resolve(r)
+        delete window[error]
+      }, true)
+      var error = _this.transformCallback(function (e) {
+        reject(e)
+        delete window[callback]
+      }, true)
+
+      window.__TAURI_INVOKE_HANDLER__(
+        _objectSpread(
+          {
+            callback: callback,
+            error: error
+          },
+          args
+        )
+      )
+    })
+  }
+
+  window.__TAURI__.loadAsset = function loadAsset(assetName, assetType) {
+    return this.promisified({
+      cmd: 'loadAsset',
+      asset: assetName,
+      assetType: assetType || 'unknown'
+    })
+  }
+
+  document.addEventListener(
+    'error',
+    function (e) {
+      var target = e.target
+      while (target != null) {
+        if (
+          target.matches
+            ? target.matches('img')
+            : target.msMatchesSelector('img')
+        ) {
+          window.__TAURI__.loadAsset(target.src, 'image').then(function (img) {
+            target.src = img
+          })
+          break
+        }
+        target = target.parentElement
+      }
+    },
+    true
+  )
+
+  // open <a href="..."> links with the Tauri API
+  function __openLinks() {
+    document.querySelector('body').addEventListener(
+      'click',
+      function (e) {
+        var target = e.target
+        while (target != null) {
+          if (
+            target.matches ? target.matches('a') : target.msMatchesSelector('a')
+          ) {
+            if (
+              target.href &&
+              target.href.startsWith('http') &&
+              target.target === '_blank'
+            ) {
+              window.__TAURI_INVOKE_HANDLER__({
+                cmd: 'open',
+                uri: target.href
+              })
+              e.preventDefault()
+            }
+            break
+          }
+          target = target.parentElement
+        }
+      },
+      true
+    )
+  }
+
+  if (
+    document.readyState === 'complete' ||
+    document.readyState === 'interactive'
+  ) {
+    __openLinks()
+  } else {
+    window.addEventListener(
+      'DOMContentLoaded',
+      function () {
+        __openLinks()
+      },
+      true
+    )
+  }
+
+  let permissionSettable = false
+  let permissionValue = 'default'
+
+  function isPermissionGranted() {
+    if (window.Notification.permission !== 'default') {
+      return Promise.resolve(window.Notification.permission === 'granted')
+    }
+    return window.__TAURI__.promisified({
+      cmd: 'isNotificationPermissionGranted'
+    })
+  }
+
+  function setNotificationPermission(value) {
+    permissionSettable = true
+    window.Notification.permission = value
+    permissionSettable = false
+  }
+
+  function requestPermission() {
+    return window.__TAURI__
+      .promisified({
+        cmd: 'requestNotificationPermission'
+      })
+      .then(function (permission) {
+        setNotificationPermission(permission)
+        return permission
+      })
+  }
+
+  function sendNotification(options) {
+    if (typeof options === 'object') {
+      Object.freeze(options)
+    }
+
+    isPermissionGranted().then(function (permission) {
+      if (permission) {
+        return window.__TAURI__.promisified({
+          cmd: 'notification',
+          options:
+            typeof options === 'string'
+              ? {
+                  title: options
+                }
+              : options
+        })
+      }
+    })
+  }
+
+  window.Notification = function (title, options) {
+    var opts = options || {}
+    sendNotification(
+      Object.assign(opts, {
+        title: title
+      })
+    )
+  }
+
+  window.Notification.requestPermission = requestPermission
+
+  Object.defineProperty(window.Notification, 'permission', {
+    enumerable: true,
+    get: function () {
+      return permissionValue
+    },
+    set: function (v) {
+      if (!permissionSettable) {
+        throw new Error('Readonly property')
+      }
+      permissionValue = v
+    }
+  })
+
+  isPermissionGranted().then(function (response) {
+    if (response === null) {
+      setNotificationPermission('default')
+    } else {
+      setNotificationPermission(response ? 'granted' : 'denied')
+    }
+  })
+
+  window.alert = function (message) {
+    window.__TAURI_INVOKE_HANDLER__({
+      cmd: 'messageDialog',
+      message: message
+    })
+  }
+
+  window.confirm = function (message) {
+    return window.__TAURI__.promisified({
+      cmd: 'askDialog',
+      message: message
+    })
+  }
+})()
+</script><script>(function () {
+  function loadAsset(path, type) {
+    if (path) {
+      window.__TAURI__.loadAsset(path, type)
+    }
+  }
+
+  var observer = new MutationObserver(mutation => {
+    mutation.forEach(function (mutationRecord) {
+      var addedNodes = mutationRecord.addedNodes
+      addedNodes.forEach(function (node) {
+        if (node.nodeType === 1) {
+          if (node.tagName === 'SCRIPT') {
+            node.onload = node.onerror = null
+            loadAsset(node.src)
+          } else if (node.tagName === 'LINK') {
+            if (node.type === 'text/css' || (node.href && node.href.endsWith('.css'))) {
+              loadAsset(node.href, 'stylesheet')
+            }
+          }
+        }
+      })
+    })
+  })
+
+  
+    var target = document.head
+  
+
+  observer.observe(target, {
+    childList: true,
+    subtree: true
+  })
+})()
+</script><meta charset="utf-8"><link href="data:image/vnd.microsoft.icon;base64,"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#000000"><meta name="description" content="Web site created using create-react-app"><link href="data:image/png;base64,"><link href="/yourcontrolsinstaller/manifest.json"><title>React App</title><style></style><meta http-equiv="Content-Security-Policy" content="default-src blob: data: filesystem: ws: http: https: 'unsafe-eval' 'unsafe-inline'"></head><body><script>(function () {
+  function loadAsset(path, type) {
+    if (path) {
+      window.__TAURI__.loadAsset(path, type)
+    }
+  }
+
+  var observer = new MutationObserver(mutation => {
+    mutation.forEach(function (mutationRecord) {
+      var addedNodes = mutationRecord.addedNodes
+      addedNodes.forEach(function (node) {
+        if (node.nodeType === 1) {
+          if (node.tagName === 'SCRIPT') {
+            node.onload = node.onerror = null
+            loadAsset(node.src)
+          } else if (node.tagName === 'LINK') {
+            if (node.type === 'text/css' || (node.href && node.href.endsWith('.css'))) {
+              loadAsset(node.href, 'stylesheet')
+            }
+          }
+        }
+      })
+    })
+  })
+
+  
+    var target = document.documentElement
+  
+
+  observer.observe(target, {
+    childList: true,
+    subtree: true
+  })
+})()
+</script><noscript>You need to enable JavaScript to run this app.</noscript><script src="https://cdnjs.cloudflare.com/ajax/libs/web-animations/2.2.1/web-animations-next.min.js"></script><div id="root"></div><script>!function(a){function e(e){for(var t,r,n=e[0],o=e[1],u=e[2],i=0,l=[];i<n.length;i++)r=n[i],Object.prototype.hasOwnProperty.call(s,r)&&s[r]&&l.push(s[r][0]),s[r]=0;for(t in o)Object.prototype.hasOwnProperty.call(o,t)&&(a[t]=o[t]);for(d&&d(e);l.length;)l.shift()();return f.push.apply(f,u||[]),c()}function c(){for(var e,t=0;t<f.length;t++){for(var r=f[t],n=!0,o=1;o<r.length;o++){var u=r[o];0!==s[u]&&(n=!1)}n&&(f.splice(t--,1),e=p(p.s=r[0]))}return e}var r={},s={1:0},f=[];function p(e){if(r[e])return r[e].exports;var t=r[e]={i:e,l:!1,exports:{}};return a[e].call(t.exports,t,t.exports,p),t.l=!0,t.exports}p.e=function(n){var e,o,u,t,i,r=[],l=s[n];return 0!==l&&(l?r.push(l[2]):(e=new Promise(function(e,t){l=s[n]=[e,t]}),r.push(l[2]=e),(o=document.createElement("script")).charset="utf-8",o.timeout=120,p.nc&&o.setAttribute("nonce",p.nc),o.src=p.p+"static/js/"+({}[n]||n)+"."+{3:"28fef668"}[n]+".chunk.js",u=new Error,t=function(e){o.onerror=o.onload=null,clearTimeout(i);var t,r=s[n];0!==r&&(r&&(t=e&&("load"===e.type?"missing":e.type),e=e&&e.target&&e.target.src,u.message="Loading chunk "+n+" failed.\n("+t+": "+e+")",u.name="ChunkLoadError",u.type=t,u.request=e,r[1](u)),s[n]=void 0)},i=setTimeout(function(){t({type:"timeout",target:o})},12e4),o.onerror=o.onload=t,document.head.appendChild(o))),Promise.all(r)},p.m=a,p.c=r,p.d=function(e,t,r){p.o(e,t)||Object.defineProperty(e,t,{enumerable:!0,get:r})},p.r=function(e){"undefined"!=typeof Symbol&&Symbol.toStringTag&&Object.defineProperty(e,Symbol.toStringTag,{value:"Module"}),Object.defineProperty(e,"__esModule",{value:!0})},p.t=function(t,e){if(1&e&&(t=p(t)),8&e)return t;if(4&e&&"object"==typeof t&&t&&t.__esModule)return t;var r=Object.create(null);if(p.r(r),Object.defineProperty(r,"default",{enumerable:!0,value:t}),2&e&&"string"!=typeof t)for(var n in t)p.d(r,n,function(e){return t[e]}.bind(null,n));return r},p.n=function(e){var t=e&&e.__esModule?function(){return e.default}:function(){return e};return p.d(t,"a",t),t},p.o=function(e,t){return Object.prototype.hasOwnProperty.call(e,t)},p.p="/yourcontrolsinstaller/",p.oe=function(e){throw console.error(e),e};var t=this.webpackJsonpyourcontrolinstaller=this.webpackJsonpyourcontrolinstaller||[],n=t.push.bind(t);t.push=e,t=t.slice();for(var o=0;o<t.length;o++)e(t[o]);var d=n;c()}([]);</script><script></script><script></script></body></html>
